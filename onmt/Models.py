@@ -104,6 +104,11 @@ class RNNEncoder(EncoderBase):
 class RNNDecoderBase(nn.Module):
     """
     RNN decoder base class.
+
+    subclasses must define:
+    1) _run_forward_pass(input, context, state)
+    2) _build_rnn(self, rnn_type, input_size,
+                   hidden_size, num_layers, dropout)
     """
     def __init__(self, rnn_type, bidirectional_encoder, num_layers,
                  hidden_size, attn_type, coverage_attn, context_gate,

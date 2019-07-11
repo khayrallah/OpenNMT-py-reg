@@ -287,6 +287,7 @@ class ONMTDataset(torchtext.data.Dataset):
     def get_fields(nFeatures=0):
         fields = {}
         fields["src"] = torchtext.data.Field(
+            init_token=BOS_WORD, eos_token=EOS_WORD,  # ADDED ONLY to make src/tgt vocabs match when doing in loop (do not need start/end on src side)
             pad_token=PAD_WORD,
             include_lengths=True)
 

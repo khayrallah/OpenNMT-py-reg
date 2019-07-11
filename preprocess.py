@@ -32,9 +32,9 @@ parser.add_argument('-valid_tgt', required=True,
 parser.add_argument('-save_data', required=True,
                     help="Output file for the prepared data")
 
-parser.add_argument('-src_vocab',
+parser.add_argument('-src_vocab', # UNUSED!!
                     help="Path to an existing source vocabulary")
-parser.add_argument('-tgt_vocab',
+parser.add_argument('-tgt_vocab',  # UNUSED!!
                     help="Path to an existing target vocabulary")
 parser.add_argument('-features_vocabs_prefix', type=str, default='',
                     help="Path prefix to existing features vocabularies")
@@ -66,8 +66,12 @@ def main():
     print("Saving train/valid/fields")
 
     # Can't save fields, so remove/reconstruct at training time.
-    torch.save(onmt.IO.ONMTDataset.save_vocab(fields),
-               open(opt.save_data + '.vocab.pt', 'wb'))
+
+    # save_vocab returns a torchtext.vocab object
+    # (it does not save it as the name suggests)
+    _vocab = onmt.IO.ONMTDataset.save_vocab(fields)
+    torch.save(_vocab, open(opt.save_data + '.vocab.pt', 'wb'))
+
     train.fields = []
     valid.fields = []
     torch.save(train, open(opt.save_data + '.train.pt', 'wb'))

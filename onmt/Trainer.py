@@ -109,6 +109,10 @@ class Trainer(object):
             tgt = onmt.IO.make_features(batch, 'tgt')
             report_stats.n_src_words += src_lengths.sum()
 
+            #update the aux model state with the source sentence
+            #this might be a dummy function, depending on the type of loss
+            self.train_loss.aux_consume_src(src, src_lengths)
+
             for j in range(0, target_size-1, trunc_size):
                 # 1. Create truncated target.
                 tgt = tgt[j: j + trunc_size]

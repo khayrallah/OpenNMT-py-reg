@@ -99,7 +99,10 @@ def train_opts(parser):
     # Model loading/saving options
     parser.add_argument('-data', required=True,
                         help="""Path prefix to the ".train.pt" and
-                        ".valid.pt" file path from preprocess.py""")
+                        ".valid.pt" file path from preprocess.py AND BY DEFAULT, unless -vocabs is set, .vocab.pt""")
+
+    parser.add_argument('-vocabs', default='', type=str,
+                        help="""Path prefix to the vocabs .pt file (defaults to <data>.vocabs.pt)""")
 
     parser.add_argument('-save_model', default='model',
                         help="""Model filename (the model will be saved as
@@ -160,6 +163,21 @@ def train_opts(parser):
                         help="Dropout probability; applied in LSTM stacks.")
     parser.add_argument('-truncated_decoder', type=int, default=0,
                         help="""Truncated bptt.""")
+    # KL Smoothing
+    action = parser.add_mutually_exclusive_group(required=False)
+    action.add_argument('-KL_aux_MT_smoothing',
+                        help='Use trained, auxiliary NMT model for KL label smoothing.'
+                             'must be trained on the exact same vocabulary as the normal MT system!')
+
+    parser.add_argument('-KL_smoothing_epsilon', type=float, default=0.1,
+                        help="""epsilon param for uniform label smoothing
+                        (KL Divergency between the model output distribution 
+                        and some other distribution). 0: normal NLL (no smoothing), 
+                        1:all weight on distribution. 
+                        Has no effect unless one of KL_uniform_smoothing, 
+                        KL_LM_smoothing, or KL_distribution_smoothing is set.""")
+
+
     # learning rate
     parser.add_argument('-learning_rate', type=float, default=1.0,
                         help="""Starting learning rate. If adagrad/adadelta/adam

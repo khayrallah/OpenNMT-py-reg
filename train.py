@@ -40,7 +40,39 @@ if torch.cuda.is_available() and not opt.gpuid:
     print("WARNING: You have a CUDA device, should run with -gpuid 0")
 
 if opt.gpuid:
+    from socket import gethostname
+    import sys
+    print(gethostname())
+    sys.stdout.flush()
+
+    if opt.gpuid[0] < 0:
+        import nvidia_smi
+        gpus = nvidia_smi.getAvailable(maxLoad=0.01, maxMemory=0.01, limit=100)
+        print('available GPUS:', gpus)
+        import sys
+        sys.stdout.flush()
+        opt.gpuid = [int(gpus[0]), ]
+        print('gpuid was <0, setting to %d (which currently looks available)' % gpus[0])
+        sys.stdout.flush()
     cuda.set_device(opt.gpuid[0])
+    print('I just claimed gpu', opt.gpuid[0])
+    sys.stdout.flush()
+
+    print('simple test')
+    sys.stdout.flush()
+    from torch.autograd import Variable
+    a = Variable(torch.randn(3,4,5), requires_grad=True).cuda()
+    b = torch.randn(3,4,5).cuda()
+    a.backward(b)
+    print('did simple test')
+    sys.stdout.flush()
+
+    # Custer gpu allocation problem: Keep getting scooped (usually by myself) - time between checking which GPU is free and using it is 30+ sec
+    # so claim the GPU ASAP
+    unused = torch.randn(2, 2).type(torch.cuda.FloatTensor)
+    print('I just actually used the gpu', opt.gpuid[0])
+    sys.stdout.flush()
+
     if opt.seed > 0:
         torch.cuda.manual_seed(opt.seed)
 
@@ -102,20 +134,33 @@ def make_valid_data_iter(valid_data, opt):
                 train=False, sort=True)
 
 
-def make_loss_compute(model, tgt_vocab, dataset, opt):
+def make_loss_compute(model, tgt_vocab, dataset, opt, validation=False):
     """
     This returns user-defined LossCompute object, which is used to
     compute loss in train/validate process. You can implement your
     own *LossCompute class, by subclassing LossComputeBase.
     """
+    # only use label smoothing / regularization for training (i.e. validation=False)
+
     if opt.copy_attn:
+        if opt.KL_aux_MT_smoothing:
+            raise NotImplementedError('label smoothing ot supported for copy_attn')
         compute = onmt.modules.CopyGeneratorLossCompute(
             model.generator, tgt_vocab, dataset, opt.copy_attn_force)
+    elif opt.KL_aux_MT_smoothing and not validation:
+        print('using aux NMT label smoothing, eps=', opt.KL_smoothing_epsilon)
+        compute = onmt.Loss.NMTKLDivNMTLossCompute(model.generator, tgt_vocab,
+                                                   smoothing_epsilon=opt.KL_smoothing_epsilon,
+                                                   aux_checkpoint=opt.KL_aux_MT_smoothing)
     else:
         compute = onmt.Loss.NMTLossCompute(model.generator, tgt_vocab)
 
     if use_gpu(opt):
+        print('calling compute.cuda()')
+        sys.stdout.flush()
         compute.cuda()
+        print('done with compute.cuda()')
+        sys.stdout.flush()
 
     return compute
 
@@ -126,9 +171,9 @@ def train_model(model, train_data, valid_data, fields, optim):
     valid_iter = make_valid_data_iter(valid_data, opt)
 
     train_loss = make_loss_compute(model, fields["tgt"].vocab,
-                                   train_data, opt)
+                                   train_data, opt, validation=False)
     valid_loss = make_loss_compute(model, fields["tgt"].vocab,
-                                   valid_data, opt)
+                                   valid_data, opt, validation=True)
 
     trunc_size = opt.truncated_decoder  # Badly named...
     shard_size = opt.max_generator_batches
@@ -185,16 +230,25 @@ def tally_parameters(model):
 
 
 def load_fields(train, valid, checkpoint):
-    fields = onmt.IO.ONMTDataset.load_fields(
-                torch.load(opt.data + '.vocab.pt'))
-    fields = dict([(k, f) for (k, f) in fields.items()
-                  if k in train.examples[0].__dict__])
-    train.fields = fields
-    valid.fields = fields
-
     if opt.train_from:
         print('Loading vocab from checkpoint at %s.' % opt.train_from)
         fields = onmt.IO.ONMTDataset.load_fields(checkpoint['vocab'])
+    else:
+        if opt.vocabs:
+            vocab_file = opt.vocabs
+        else:
+            vocab_file = opt.data + '.vocab.pt'
+
+        print('Loading vocab from vocab file at %s.' % vocab_file)
+
+        fields = onmt.IO.ONMTDataset.load_fields(torch.load(vocab_file))
+        
+
+    #took out of the if statement to fix load_from bug    
+    fields = dict([(k, f) for (k, f) in fields.items()
+                       if k in train.examples[0].__dict__])
+    train.fields = fields
+    valid.fields = fields
 
     print(' * vocabulary size. source = %d; target = %d' %
           (len(fields['src'].vocab), len(fields['tgt'].vocab)))
@@ -224,19 +278,12 @@ def build_model(model_opt, opt, fields, checkpoint):
 
 
 def build_optim(model, checkpoint):
-    if opt.train_from:
-        print('Loading optimizer from checkpoint.')
-        optim = checkpoint['optim']
-        optim.optimizer.load_state_dict(
-            checkpoint['optim'].optimizer.state_dict())
-    else:
-        # what members of opt does Optim need?
-        optim = onmt.Optim(
-            opt.optim, opt.learning_rate, opt.max_grad_norm,
-            lr_decay=opt.learning_rate_decay,
-            start_decay_at=opt.start_decay_at,
-            opt=opt
-        )
+    optim = onmt.Optim(
+        opt.optim, opt.learning_rate, opt.max_grad_norm,
+        lr_decay=opt.learning_rate_decay,
+        start_decay_at=opt.start_decay_at,
+        opt=opt
+    )
 
     optim.set_parameters(model.parameters())
 

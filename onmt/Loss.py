@@ -8,8 +8,10 @@ from __future__ import division
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+import math
 
 import onmt
+from collections import namedtuple
 
 
 class LossComputeBase(nn.Module):
@@ -53,6 +55,9 @@ class LossComputeBase(nn.Module):
             batch_stats.update(stats)
 
         return batch_stats
+
+        def aux_consume_src(self, src, src_length):
+            pass  # does nothing unless using NMT aux model
 
     def stats(self, loss, scores, target):
         """
@@ -102,6 +107,108 @@ class NMTLossCompute(LossComputeBase):
         stats = self.stats(loss_data, scores_data, target_data)
 
         return loss, stats
+
+######################
+
+
+class NMTKLDivNMTLossCompute(LossComputeBase):
+    """
+    NMT Loss Computation with KL divergence between LM distribution and NMT model distribution
+    (see Rethinking the Inception Architecture for Computer Vision)
+
+    In theory, setting smoothing_epsilon==0 should be same as NMTLossCompute.
+    But for now I'm keeping all the bad copy-code that I can compare this
+    implemementation directly to the un-mucked-with one.
+    """
+    def __init__(self, generator, tgt_vocab, smoothing_epsilon, aux_checkpoint):
+        super(NMTKLDivNMTLossCompute, self).__init__(generator, tgt_vocab)
+        self.copy_attn = False
+        weight = torch.ones(len(tgt_vocab))
+        weight[self.padding_idx] = 0
+
+        # standard NLL loss term:
+        self.criterion0 = nn.NLLLoss(weight, size_average=False)
+
+        # ratio between normal cross entropy and LM cross entropy
+        self.smoothing_epsilon = smoothing_epsilon
+
+        #initial the aux model
+        # The first argument of onmt.Translator just needs *.model and *.gpu
+        OptModel = namedtuple('OptModel', ['model', 'gpu'])
+        opt_model = OptModel(model=aux_checkpoint, gpu=0)  # TODO how do we know it is gpu 0 ???????????
+        self.translator = onmt.Translator(opt_model, dict())
+
+        # # ONLY USED FOR DEBUG
+        self.debugLangModelNLL = nn.NLLLoss(weight, size_average=False)
+
+        # print('foo')
+        # for thing, param in zip(self.translator.model.state_dict(), self.translator.model.parameters()):
+        #     print(thing, type(param.data), param.size(), hash(param), id(param))
+        # print('end foo')
+
+    #function that takes in the NMT source side, and updated the input state of the NMT model to use it
+    def aux_consume_src(self, src, src_lengths):
+        encStates, self.context = self.translator.model.encoder(src, src_lengths)
+        self.decStates = self.translator.model.decoder.init_decoder_state(src, self.context, encStates)
+
+        # print('src:', src.squeeze(2).data)
+        # for sent in src.squeeze(2).transpose(0, 1).data:
+        #     print([self.translator.fields["src"].vocab.itos[i] for i in sent])
+        #     break
+
+    def compute_loss(self, batch, output, target, **kwargs):
+        """ See base class for args description. """
+
+        # print('tgt:', target.data)
+        # for sent in target.transpose(0, 1).data:
+        #     print([self.translator.fields["tgt"].vocab.itos[i] for i in sent])
+        #     break
+
+        scores = self.generator(self.bottle(output))  # scores are log-probs
+        scores_data = scores.data.clone()
+
+        # target does not contain start tokens, so have to add them (else aux system is one timestep off)
+        BOS_int = self.translator.fields["tgt"].vocab.stoi[onmt.IO.BOS_WORD]
+        start_tokens = Variable(torch.zeros(1, output.size()[1]).type(torch.LongTensor) + BOS_int)
+        start_tokens = start_tokens.cuda()
+        target2 = torch.cat([start_tokens, target.unsqueeze(2)], dim=0)[:-1, :]  # :-1 -  just to keep size same
+        # TODO: remove EOS ?? (must do per sent) Don't think it matters because there is a mask
+        target = target.view(-1)
+        target_data = target.data.clone()
+
+        decOut, decStates, attn = self.translator.model.decoder(target2, self.context, self.decStates)
+        aux_logprobs = torch.cat([self.translator.model.generator.forward(dec).unsqueeze(0) for dec in decOut])
+
+        # print('Model predictions (given all previous gold words, not a true translation):')
+        # import numpy as np
+        # for sent in np.argmax(aux_logprobs.cpu().data.numpy(), axis=2).transpose():
+        #     print([self.translator.fields["tgt"].vocab.itos[i] for i in sent])
+        #     break
+
+        aux_probs=torch.exp(aux_logprobs)
+        # debug_NLL = self.debugLangModelNLL(aux_logprobs.view(scores.size()), target)
+        # aux_stats = self.stats(loss=debug_NLL.data.clone(),
+        #                        scores=aux_logprobs.view(scores_data.size()).data.clone(),
+        #                        target=target_data)
+        # print('output for aux stats:')
+        # aux_stats.output(epoch=-1, batch=42, n_batches=42, start=42)
+
+        loss0 = self.criterion0(scores, target)  # criterion0 = nn.NLLLoss(weight, size_average=False)
+
+        # cross entropy with teacher probability distribution = dot teacher probs with model log probs
+        # as in "Sequence-Level Knowledge Distillation" by Kim and Rush
+        loss1 = - torch.mm(aux_probs.detach().view(1, -1), scores.view(-1, 1))
+        loss = (1-self.smoothing_epsilon) * loss0 + self.smoothing_epsilon * loss1
+        # print('normal loss=', loss0.data[0], 'aux loss=', loss1.data[0], 'combined loss=', loss.data[0], 'w/ lambda=', self.smoothing_epsilon)
+
+        loss_data = loss0.data.clone()  # do stats on just the NLL Loss, not the regularization term
+
+        stats = self.stats(loss_data, scores_data, target_data)
+        # print('output for normal stats:')
+        # stats.output(epoch=-2, batch=42, n_batches=42, start=42)
+
+        return loss, stats
+
 
 
 def make_gen_state(output, batch, attns, range_, copy_attn=None):
