@@ -174,7 +174,7 @@ def train_opts(parser):
                         (KL Divergency between the model output distribution 
                         and some other distribution). 0: normal NLL (no smoothing), 
                         1:all weight on distribution. 
-                        Has no effect unless one of KL_aux_smoothing.""")
+                        Has no effect unless KL_aux_smoothing is set.""")
 
 
     # learning rate
