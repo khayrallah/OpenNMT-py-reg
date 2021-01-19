@@ -1,3 +1,7 @@
+This fork of [OpenNMT](https://github.com/OpenNMT/OpenNMT) contains the code for the WMNT 2018 paper [Regularized Training Objective for Continued Training for Domain Adaptation in Neural Machine Translation] (https://www.aclweb.org/anthology/W18-2705/) by [Huda Khayrallah](http://cs.jhu.edu/~huda), [Brian Thompson](https://thompsonb.github.io/), 
+[Kevin Duh](http://www.cs.jhu.edu/~kevinduh/), [Philipp Koehn](http://www.cs.jhu.edu/~phi/). 
+
+
 # OpenNMT-py: Open-Source Neural Machine Translation
 
 This is a [Pytorch](https://github.com/pytorch/pytorch)
